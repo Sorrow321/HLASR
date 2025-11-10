@@ -16,6 +16,16 @@
 
 static std::unordered_map<int, std::vector<unsigned char>> g_playerVoiceBuffers;
 
+struct PlayerVoiceState
+{
+	bool isRecording = false;
+	double lastVoiceTime = 0.0;
+	double segmentStartTime = 0.0;
+};
+
+static std::unordered_map<int, PlayerVoiceState> g_playerVoiceState;
+static const double kSilenceCloseSeconds = 0.6;
+
 static void ensure_directory_chain(const std::string &path)
 {
 	if (path.empty())
@@ -93,6 +103,15 @@ static void OnHandleNetCommand(IVoidHookChain<IGameClient*, int8>* chain, IGameC
 		int id = client->GetId();
 		auto &buf = g_playerVoiceBuffers[id];
 		buf.insert(buf.end(), msg->data + beforeRead, msg->data + beforeRead + consumed);
+
+		// Mark recording started/continued
+		auto &st = g_playerVoiceState[id];
+		if (!st.isRecording)
+		{
+			st.isRecording = true;
+			st.segmentStartTime = afterVoice;
+		}
+		st.lastVoiceTime = afterVoice;
 	}
 }
 
@@ -213,6 +232,83 @@ void VoiceCapture_RegisterServerCommands()
 {
 	g_engfuncs.pfnAddServerCommand("voice_segment_start", Cmd_VoiceSegmentStart);
 	g_engfuncs.pfnAddServerCommand("voice_segment_stop", Cmd_VoiceSegmentStop);
+}
+
+// Periodic flush based on silence timeout
+void VoiceCapture_OnStartFrame()
+{
+	if (!g_RehldsSvs || !g_RehldsApi)
+		return;
+
+	IRehldsServerData *svd = g_RehldsApi->GetServerData();
+	double now = svd ? svd->GetTime() : 0.0;
+
+	int maxc = g_RehldsSvs->GetMaxClients();
+	for (int idx = 1; idx <= maxc; ++idx)
+	{
+		IGameClient *cl = g_RehldsSvs->GetClient(idx);
+		if (!cl)
+			continue;
+
+		int id = cl->GetId();
+		auto stIt = g_playerVoiceState.find(id);
+		if (stIt == g_playerVoiceState.end())
+			continue;
+
+		auto &st = stIt->second;
+		if (!st.isRecording)
+			continue;
+
+		// Close segment if silence for threshold or client disconnected
+		bool disconnected = !cl->IsConnected();
+		bool silentTimeout = (now > 0.0 && (now - st.lastVoiceTime) >= kSilenceCloseSeconds);
+		if ((silentTimeout || disconnected))
+		{
+			auto bufIt = g_playerVoiceBuffers.find(id);
+			if (bufIt != g_playerVoiceBuffers.end() && !bufIt->second.empty())
+			{
+				// Build and write files (reuse logic from stop command)
+				std::string speexPath = build_output_path(cl, ".speex");
+				std::string jsonPath  = build_output_path(cl, ".json");
+
+				size_t lastSlash = speexPath.find_last_of('/');
+				if (lastSlash != std::string::npos) {
+					ensure_directory_chain(speexPath.substr(0, lastSlash));
+				}
+
+				// Write audio
+				FILE *f = fopen(speexPath.c_str(), "wb");
+				if (f) {
+					fwrite(bufIt->second.data(), 1, bufIt->second.size(), f);
+					fclose(f);
+				}
+
+				// Metadata
+				const char *name = cl->GetName();
+				edict_t *pEdict = cl->GetEdict();
+				const char *auth = GETPLAYERAUTHID(pEdict);
+				INetChan *chan = cl->GetNetChan();
+				const netadr_t *remote = chan ? chan->GetRemoteAdr() : nullptr;
+				std::string ip = netadr_to_string(remote);
+
+				FILE *fj = fopen(jsonPath.c_str(), "wb");
+				if (fj) {
+					fprintf(fj, "{\n");
+					fprintf(fj, "  \"steamid\": \"%s\",\n", auth ? auth : "");
+					fprintf(fj, "  \"name\": \"%s\",\n", name ? name : "");
+					fprintf(fj, "  \"ip\": \"%s\",\n", ip.c_str());
+					fprintf(fj, "  \"bytes\": %u\n", (unsigned)bufIt->second.size());
+					fprintf(fj, "}\n");
+					fclose(fj);
+				}
+
+				bufIt->second.clear();
+			}
+
+			st.isRecording = false;
+			st.segmentStartTime = 0.0;
+		}
+	}
 }
 
 

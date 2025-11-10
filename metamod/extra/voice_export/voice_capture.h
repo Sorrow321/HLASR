@@ -11,5 +11,7 @@
 void VoiceCapture_RegisterHooks();
 void VoiceCapture_UnregisterHooks();
 void VoiceCapture_RegisterServerCommands();
+void VoiceCapture_OnStartFrame();
+
 
 
