@@ -110,6 +110,11 @@ static void OnHandleNetCommand(IVoidHookChain<IGameClient*, int8>* chain, IGameC
 		{
 			st.isRecording = true;
 			st.segmentStartTime = afterVoice;
+
+			const char *nm = client->GetName();
+			char info[256];
+			std::snprintf(info, sizeof(info), "[voice_export] REC START: id=%d name=\"%s\"\n", id, nm ? nm : "");
+			SERVER_PRINT(info);
 		}
 		st.lastVoiceTime = afterVoice;
 	}
@@ -229,7 +234,9 @@ static void Cmd_VoiceSegmentStop(void)
 	}
 
 	it->second.clear();
-	SERVER_PRINT("[voice_export] Segment saved\n");
+	char info[512];
+	std::snprintf(info, sizeof(info), "[voice_export] Segment saved: %u bytes -> %s\n", (unsigned)it->second.size(), speexPath.c_str());
+	SERVER_PRINT(info);
 }
 
 void VoiceCapture_RegisterServerCommands()
@@ -305,6 +312,10 @@ void VoiceCapture_OnStartFrame()
 					fprintf(fj, "}\n");
 					fclose(fj);
 				}
+
+				char info[640];
+				std::snprintf(info, sizeof(info), "[voice_export] REC STOP: slot=%d name=\"%s\" %u bytes -> %s\n", idx + 1, name ? name : "", (unsigned)bufIt->second.size(), speexPath.c_str());
+				SERVER_PRINT(info);
 
 				bufIt->second.clear();
 			}
