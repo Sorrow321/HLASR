@@ -60,8 +60,8 @@ static std::string build_output_path(IGameClient *client, const char *ext)
 	char gameDir[512] = {0};
 	g_engfuncs.pfnGetGameDir(gameDir);
 
-	edict_t *pEdict = client->GetEdict();
-	const char *auth = GETPLAYERAUTHID(pEdict);
+	edict_t *pEdict = client ? client->GetEdict() : nullptr;
+	const char *auth = pEdict ? GETPLAYERAUTHID(pEdict) : nullptr;
 	if (!auth) auth = "UNKNOWN";
 	std::string steamid = sanitize_filename(auth);
 
@@ -244,7 +244,7 @@ void VoiceCapture_OnStartFrame()
 	double now = svd ? svd->GetTime() : 0.0;
 
 	int maxc = g_RehldsSvs->GetMaxClients();
-	for (int idx = 1; idx <= maxc; ++idx)
+	for (int idx = 0; idx < maxc; ++idx)
 	{
 		IGameClient *cl = g_RehldsSvs->GetClient(idx);
 		if (!cl)
