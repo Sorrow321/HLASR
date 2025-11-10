@@ -140,8 +140,10 @@ static void Cmd_VoiceSegmentStart(void)
 		SERVER_PRINT("Usage: voice_segment_start <player_index>\n");
 		return;
 	}
-	int idx = atoi(CMD_ARGV(1));
-	if (idx <= 0 || idx > g_RehldsSvs->GetMaxClients()) {
+	int userIdx = atoi(CMD_ARGV(1));
+	int maxc = g_RehldsSvs->GetMaxClients();
+	int idx = userIdx - 1; // convert from 1-based status index to 0-based rehlds index
+	if (idx < 0 || idx >= maxc) {
 		SERVER_PRINT("[voice_export] Invalid player index\n");
 		return;
 	}
@@ -164,8 +166,10 @@ static void Cmd_VoiceSegmentStop(void)
 		SERVER_PRINT("Usage: voice_segment_stop <player_index>\n");
 		return;
 	}
-	int idx = atoi(CMD_ARGV(1));
-	if (idx <= 0 || idx > g_RehldsSvs->GetMaxClients()) {
+	int userIdx = atoi(CMD_ARGV(1));
+	int maxc = g_RehldsSvs->GetMaxClients();
+	int idx = userIdx - 1;
+	if (idx < 0 || idx >= maxc) {
 		SERVER_PRINT("[voice_export] Invalid player index\n");
 		return;
 	}
