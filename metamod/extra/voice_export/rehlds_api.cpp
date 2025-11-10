@@ -1,6 +1,6 @@
 #include <extdll.h>
 #include <meta_api.h>
-#include "rehlds_api.h"
+#include "vx_rehlds_api.h"
 
 IRehldsApi* g_RehldsApi;
 const RehldsFuncs_t* g_RehldsFuncs;

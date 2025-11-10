@@ -1,6 +1,6 @@
 #include <extdll.h>
 #include <meta_api.h>
-#include "rehlds_api.h"
+#include "vx_rehlds_api.h"
 #include "voice_capture.h"
 
 meta_globals_t *gpMetaGlobals;

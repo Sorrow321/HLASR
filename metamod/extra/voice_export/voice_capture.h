@@ -4,7 +4,7 @@
 #include <unordered_map>
 #include <extdll.h>
 #include <meta_api.h>
-#include "rehlds_api.h"
+#include "vx_rehlds_api.h"
 #include "rehlds_interfaces.h"
 #include <netadr.h>
 
