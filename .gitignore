@@ -18,3 +18,10 @@
 
 metamod/version/appversion.h
 publish
+metamod/extra/voice_export/*.dll
+metamod/extra/voice_export/*.exp
+metamod/extra/voice_export/*.so
+metamod/extra/voice_export/*.lib
+metamod/extra/voice_export/*.exe
+metamod/extra/voice_export/*.obj
+metamod/extra/voice_export/*.o

@@ -1,0 +1,218 @@
+#include "voice_capture.h"
+#include <ctime>
+#include <cstdio>
+#include <cstdint>
+#include <cstdlib>
+#include <cerrno>
+#include <algorithm>
+#include <sstream>
+#ifdef _WIN32
+#include <direct.h>
+#else
+#include <sys/stat.h>
+#include <sys/types.h>
+#endif
+#include "enginecallbacks.h"
+
+static std::unordered_map<int, std::vector<unsigned char>> g_playerVoiceBuffers;
+
+static void ensure_directory_chain(const std::string &path)
+{
+	if (path.empty())
+		return;
+
+	size_t pos = 0;
+	do {
+		pos = path.find('/', pos + 1);
+		std::string sub = path.substr(0, pos);
+		if (sub.empty())
+			continue;
+#ifdef _WIN32
+		_mkdir(sub.c_str());
+#else
+		mkdir(sub.c_str(), 0755);
+#endif
+	} while (pos != std::string::npos);
+}
+
+static std::string sanitize_filename(const std::string &s)
+{
+	std::string out = s;
+	for (char &ch : out) {
+		if (ch == '/' || ch == '\\' || ch == ':' || ch == '*' || ch == '?' || ch == '"' || ch == '<' || ch == '>' || ch == '|')
+			ch = '_';
+	}
+	return out;
+}
+
+static std::string build_output_path(IGameClient *client, const char *ext)
+{
+	char gameDir[512] = {0};
+	g_engfuncs.pfnGetGameDir(gameDir);
+
+	edict_t *pEdict = client->GetEdict();
+	const char *auth = GETPLAYERAUTHID(pEdict);
+	if (!auth) auth = "UNKNOWN";
+	std::string steamid = sanitize_filename(auth);
+
+	std::time_t t = std::time(nullptr);
+	char tsbuf[32];
+	std::strftime(tsbuf, sizeof(tsbuf), "%Y%m%d-%H%M%S", std::localtime(&t));
+
+	std::ostringstream oss;
+	oss << gameDir << "/data/voice_logs/" << steamid << "/" << tsbuf << ext;
+	return oss.str();
+}
+
+static std::string netadr_to_string(const netadr_t *adr)
+{
+	if (!adr) return "";
+	char buf[64];
+	std::snprintf(buf, sizeof(buf), "%u.%u.%u.%u:%u", adr->ip[0], adr->ip[1], adr->ip[2], adr->ip[3], (unsigned)adr->port);
+	return std::string(buf);
+}
+
+// Hook: HandleNetCommand
+static void OnHandleNetCommand(IVoidHookChain<IGameClient*, int8>* chain, IGameClient* client, int8 cmd)
+{
+	if (!g_RehldsFuncs)
+		return chain->callNext(client, cmd);
+
+	sizebuf_t *msg = g_RehldsFuncs->GetNetMessage();
+	int *pReadCount = g_RehldsFuncs->GetMsgReadCount();
+	int beforeRead = pReadCount ? *pReadCount : 0;
+	double beforeVoice = client->GetLastVoiceTime();
+
+	chain->callNext(client, cmd);
+
+	double afterVoice = client->GetLastVoiceTime();
+	int afterRead = pReadCount ? *pReadCount : beforeRead;
+
+	if (afterVoice > beforeVoice && msg && afterRead > beforeRead && msg->data && afterRead <= msg->cursize) {
+		int consumed = afterRead - beforeRead;
+		int id = client->GetId();
+		auto &buf = g_playerVoiceBuffers[id];
+		buf.insert(buf.end(), msg->data + beforeRead, msg->data + beforeRead + consumed);
+	}
+}
+
+void VoiceCapture_RegisterHooks()
+{
+	if (g_RehldsHookchains) {
+		g_RehldsHookchains->HandleNetCommand()->registerHook(OnHandleNetCommand);
+	}
+}
+
+void VoiceCapture_UnregisterHooks()
+{
+	if (g_RehldsHookchains) {
+		g_RehldsHookchains->HandleNetCommand()->unregisterHook(OnHandleNetCommand);
+	}
+}
+
+// Server commands
+static void Cmd_VoiceSegmentStart(void)
+{
+	if (!g_RehldsSvs) {
+		SERVER_PRINT("[voice_export] ReHLDS not available\n");
+		return;
+	}
+	if (CMD_ARGC() < 2) {
+		SERVER_PRINT("Usage: voice_segment_start <player_index>\n");
+		return;
+	}
+	int idx = atoi(CMD_ARGV(1));
+	if (idx <= 0 || idx > g_RehldsSvs->GetMaxClients()) {
+		SERVER_PRINT("[voice_export] Invalid player index\n");
+		return;
+	}
+	IGameClient *cl = g_RehldsSvs->GetClient(idx);
+	if (!cl || !cl->IsConnected()) {
+		SERVER_PRINT("[voice_export] Player not connected\n");
+		return;
+	}
+	g_playerVoiceBuffers[cl->GetId()].clear();
+	SERVER_PRINT("[voice_export] Started segment\n");
+}
+
+static void Cmd_VoiceSegmentStop(void)
+{
+	if (!g_RehldsSvs) {
+		SERVER_PRINT("[voice_export] ReHLDS not available\n");
+		return;
+	}
+	if (CMD_ARGC() < 2) {
+		SERVER_PRINT("Usage: voice_segment_stop <player_index>\n");
+		return;
+	}
+	int idx = atoi(CMD_ARGV(1));
+	if (idx <= 0 || idx > g_RehldsSvs->GetMaxClients()) {
+		SERVER_PRINT("[voice_export] Invalid player index\n");
+		return;
+	}
+	IGameClient *cl = g_RehldsSvs->GetClient(idx);
+	if (!cl || !cl->IsConnected()) {
+		SERVER_PRINT("[voice_export] Player not connected\n");
+		return;
+	}
+
+	int id = cl->GetId();
+	auto it = g_playerVoiceBuffers.find(id);
+	if (it == g_playerVoiceBuffers.end() || it->second.empty()) {
+		SERVER_PRINT("[voice_export] No data\n");
+		return;
+	}
+
+	// Build file paths
+	std::string speexPath = build_output_path(cl, ".speex");
+	std::string jsonPath  = build_output_path(cl, ".json");
+
+	// Ensure directories
+	size_t lastSlash = speexPath.find_last_of('/');
+	if (lastSlash != std::string::npos) {
+		ensure_directory_chain(speexPath.substr(0, lastSlash));
+	}
+
+	// Write audio
+	{
+		FILE *f = fopen(speexPath.c_str(), "wb");
+		if (!f) {
+			SERVER_PRINT("[voice_export] Failed to open audio file\n");
+			return;
+		}
+		fwrite(it->second.data(), 1, it->second.size(), f);
+		fclose(f);
+	}
+
+	// Metadata
+	const char *name = cl->GetName();
+	edict_t *pEdict = cl->GetEdict();
+	const char *auth = GETPLAYERAUTHID(pEdict);
+	INetChan *chan = cl->GetNetChan();
+	const netadr_t *remote = chan ? chan->GetRemoteAdr() : nullptr;
+	std::string ip = netadr_to_string(remote);
+
+	{
+		FILE *f = fopen(jsonPath.c_str(), "wb");
+		if (f) {
+			fprintf(f, "{\n");
+			fprintf(f, "  \"steamid\": \"%s\",\n", auth ? auth : "");
+			fprintf(f, "  \"name\": \"%s\",\n", name ? name : "");
+			fprintf(f, "  \"ip\": \"%s\",\n", ip.c_str());
+			fprintf(f, "  \"bytes\": %u\n", (unsigned)it->second.size());
+			fprintf(f, "}\n");
+			fclose(f);
+		}
+	}
+
+	it->second.clear();
+	SERVER_PRINT("[voice_export] Segment saved\n");
+}
+
+void VoiceCapture_RegisterServerCommands()
+{
+	g_engfuncs.pfnAddServerCommand("voice_segment_start", Cmd_VoiceSegmentStart);
+	g_engfuncs.pfnAddServerCommand("voice_segment_stop", Cmd_VoiceSegmentStop);
+}
+
+
