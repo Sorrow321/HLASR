@@ -33,12 +33,12 @@ META_FUNCTIONS gMetaFunctionTable =
 {
 	NULL,
 	NULL,
+	GetEntityAPI2,
 	NULL,
 	NULL,
 	NULL,
 	NULL,
-	GetEngineFunctions,
-	GetEngineFunctions_Post,
+	NULL,
 };
 
 C_DLLEXPORT int Meta_Attach(PLUG_LOADTIME now, META_FUNCTIONS *pFunctionTable, meta_globals_t *pMGlobals, gamedll_funcs_t *pGamedllFuncs)
@@ -65,39 +65,18 @@ C_DLLEXPORT int Meta_Detach(PLUG_LOADTIME now, PL_UNLOAD_REASON reason)
 	return TRUE;
 }
 
-// Minimal engine function tables to receive StartFrame callbacks
-static enginefuncs_t g_EngineFunctionsTable =
+// Hook StartFrame via DLL API (game callbacks)
+static void VX_StartFrame(void)
 {
-	/* 0-45 */ 0
-};
-
-static enginefuncs_t g_EngineFunctionsTable_Post =
-{
-	/* 0-45 */ 0
-};
-
-C_DLLEXPORT int GetEngineFunctions(enginefuncs_t *pengfuncsFromEngine, int *interfaceVersion)
-{
-	if (!pengfuncsFromEngine || !interfaceVersion)
-		return FALSE;
-
-	// Fill only StartFrame; leave others null
-	memset(&g_EngineFunctionsTable, 0, sizeof(g_EngineFunctionsTable));
-	g_EngineFunctionsTable.pfnStartFrame = []() { VoiceCapture_OnStartFrame(); };
-
-	memcpy(pengfuncsFromEngine, &g_EngineFunctionsTable, sizeof(enginefuncs_t));
-	return TRUE;
+	VoiceCapture_OnStartFrame();
 }
 
-C_DLLEXPORT int GetEngineFunctions_Post(enginefuncs_t *pengfuncsFromEngine, int *interfaceVersion)
+C_DLLEXPORT int GetEntityAPI2(DLL_FUNCTIONS *pFunctionTable, int *interfaceVersion)
 {
-	if (!pengfuncsFromEngine || !interfaceVersion)
+	if (!pFunctionTable || !interfaceVersion)
 		return FALSE;
-
-	memset(&g_EngineFunctionsTable_Post, 0, sizeof(g_EngineFunctionsTable_Post));
-	// No post callback needed currently
-
-	memcpy(pengfuncsFromEngine, &g_EngineFunctionsTable_Post, sizeof(enginefuncs_t));
+	memset(pFunctionTable, 0, sizeof(DLL_FUNCTIONS));
+	pFunctionTable->pfnStartFrame = VX_StartFrame;
 	return TRUE;
 }
 
