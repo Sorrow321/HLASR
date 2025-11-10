@@ -20,6 +20,24 @@ extern "C" {
 	extern cvar_t vx_debug;
 }
 
+// Hex helper for debug
+static void debug_hex_dump(const unsigned char* buf, unsigned int len, unsigned int maxBytes)
+{
+	if (!buf || len == 0) return;
+	char line[512];
+	unsigned int n = (len < maxBytes) ? len : maxBytes;
+	unsigned int pos = 0;
+	for (unsigned int i = 0; i < n; ++i) {
+		int wrote = std::snprintf(line + pos, sizeof(line) - pos, "%02X ", buf[i]);
+		if (wrote <= 0) break;
+		pos += (unsigned)wrote;
+		if (pos > sizeof(line) - 8) break;
+	}
+	line[pos] = '\n';
+	line[pos + 1] = '\0';
+	SERVER_PRINT(line);
+}
+
 struct PlayerVoiceState
 {
 	bool isRecording = false;
@@ -137,6 +155,18 @@ void VoiceCapture_RegisterHooks()
 {
 	if (g_RehldsHookchains) {
 		g_RehldsHookchains->HandleNetCommand()->registerHook(OnHandleNetCommand);
+		// Also observe raw client packets for debugging/voicedata signature
+		g_RehldsHookchains->PreprocessPacket()->registerHook([](IHookChain<bool, uint8*, unsigned int, const netadr_t&>* chain, uint8* data, unsigned int len, const netadr_t& from) -> bool {
+			// Only print when explicitly requested
+			if (CVAR_GET_FLOAT && CVAR_GET_FLOAT("vx_debug") >= 2.0f) {
+				char hdr[128];
+				std::snprintf(hdr, sizeof(hdr), "[voice_export] dbg PreprocessPacket: len=%u from %u.%u.%u.%u:%u\n",
+					len, from.ip[0], from.ip[1], from.ip[2], from.ip[3], (unsigned)from.port);
+				SERVER_PRINT(hdr);
+				debug_hex_dump((const unsigned char*)data, len, 64);
+			}
+			return chain->callNext(data, len, from);
+		});
 	}
 }
 
@@ -144,6 +174,7 @@ void VoiceCapture_UnregisterHooks()
 {
 	if (g_RehldsHookchains) {
 		g_RehldsHookchains->HandleNetCommand()->unregisterHook(OnHandleNetCommand);
+		// Note: lambda unregister not supported; safe since plugin unload resets hookchains
 	}
 }
 
