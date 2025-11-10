@@ -16,6 +16,10 @@
 
 static std::unordered_map<int, std::vector<unsigned char>> g_playerVoiceBuffers;
 
+extern "C" {
+	extern cvar_t vx_debug;
+}
+
 struct PlayerVoiceState
 {
 	bool isRecording = false;
@@ -117,6 +121,15 @@ static void OnHandleNetCommand(IVoidHookChain<IGameClient*, int8>* chain, IGameC
 			SERVER_PRINT(info);
 		}
 		st.lastVoiceTime = afterVoice;
+	} else {
+		// Optional debug for troubleshooting voice detection
+		if (CVAR_GET_FLOAT && CVAR_GET_FLOAT("vx_debug") >= 1.0f) {
+			char dbg[256];
+			std::snprintf(dbg, sizeof(dbg),
+				"[voice_export] dbg HandleNetCommand: cmd=%d consumed=%d voice %.2f->%.2f\n",
+				(int)cmd, (pReadCount ? (*pReadCount - beforeRead) : -1), beforeVoice, afterVoice);
+			SERVER_PRINT(dbg);
+		}
 	}
 }
 

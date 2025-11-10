@@ -4,6 +4,16 @@
 #include "voice_capture.h"
 #include <string.h>
 
+extern "C" {
+	cvar_t vx_debug = {
+		"vx_debug",
+		"1",
+		FCVAR_EXTDLL,
+		0,
+		nullptr
+	};
+}
+
 meta_globals_t *gpMetaGlobals;
 gamedll_funcs_t *gpGamedllFuncs;
 mutil_funcs_t *gpMetaUtilFuncs;
@@ -45,6 +55,9 @@ C_DLLEXPORT int Meta_Attach(PLUG_LOADTIME now, META_FUNCTIONS *pFunctionTable, m
 {
 	gpMetaGlobals = pMGlobals;
 	gpGamedllFuncs = pGamedllFuncs;
+
+	// Register debug cvar
+	CVAR_REGISTER(&vx_debug);
 
 	if (meta_init_rehlds_api()) {
 		g_engfuncs.pfnServerPrint("[voice_export] ReHLDS API initialized.\n");
