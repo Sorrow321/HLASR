@@ -247,13 +247,46 @@ static void Cmd_VoiceSegmentStop(void)
 
 	// Write audio
 	{
-		FILE *f = fopen(speexPath.c_str(), "wb");
+		// write to temporary raw path first
+		std::string rawPath = speexPath + ".raw";
+		FILE *f = fopen(rawPath.c_str(), "wb");
 		if (!f) {
 			SERVER_PRINT("[voice_export] Failed to open audio file\n");
 			return;
 		}
 		fwrite(it->second.data(), 1, it->second.size(), f);
 		fclose(f);
+
+#ifndef _WIN32
+		// Optionally wrap to Ogg Speex via speexenc if available
+		if (CVAR_GET_FLOAT && CVAR_GET_FLOAT("vx_spx") >= 1.0f) {
+			int rate = (int)CVAR_GET_FLOAT("vx_rate");
+			if (rate <= 0) rate = 11025;
+			std::string spxOut = speexPath; // final .speex path requested to change to .spx later
+			// We will actually output .spx
+			std::string spxFinal = spxOut;
+			// replace extension .speex with .spx
+			if (spxFinal.size() >= 6 && spxFinal.rfind(".speex") == spxFinal.size() - 6) {
+				spxFinal.replace(spxFinal.size() - 6, 6, ".spx");
+			} else {
+				spxFinal += ".spx";
+			}
+			char cmd[1024];
+			std::snprintf(cmd, sizeof(cmd), "speexenc --quiet --rate %d --quality 5 '%s' '%s' 2>/dev/null", rate, rawPath.c_str(), spxFinal.c_str());
+			int rc = system(cmd);
+			if (rc == 0) {
+				// remove raw and report
+				remove(rawPath.c_str());
+				char info[512];
+				std::snprintf(info, sizeof(info), "[voice_export] Wrapped to Ogg Speex: %s\n", spxFinal.c_str());
+				SERVER_PRINT(info);
+			} else {
+				char info[512];
+				std::snprintf(info, sizeof(info), "[voice_export] speexenc not available or failed (rc=%d). Kept raw: %s\n", rc, rawPath.c_str());
+				SERVER_PRINT(info);
+			}
+		}
+#endif
 	}
 
 	// Metadata
@@ -279,7 +312,7 @@ static void Cmd_VoiceSegmentStop(void)
 
 	it->second.clear();
 	char info[512];
-	std::snprintf(info, sizeof(info), "[voice_export] Segment saved: %u bytes -> %s\n", (unsigned)it->second.size(), speexPath.c_str());
+	std::snprintf(info, sizeof(info), "[voice_export] Segment saved: %u bytes\n", (unsigned)it->second.size());
 	SERVER_PRINT(info);
 }
 
@@ -331,11 +364,37 @@ void VoiceCapture_OnStartFrame()
 					ensure_directory_chain(speexPath.substr(0, lastSlash));
 				}
 
-				// Write audio
-				FILE *f = fopen(speexPath.c_str(), "wb");
+				// Write raw audio then optionally wrap to .spx
+				std::string rawPath = speexPath + ".raw";
+				FILE *f = fopen(rawPath.c_str(), "wb");
 				if (f) {
 					fwrite(bufIt->second.data(), 1, bufIt->second.size(), f);
 					fclose(f);
+#ifndef _WIN32
+					if (CVAR_GET_FLOAT && CVAR_GET_FLOAT("vx_spx") >= 1.0f) {
+						int rate = (int)CVAR_GET_FLOAT("vx_rate");
+						if (rate <= 0) rate = 11025;
+						std::string spxFinal = speexPath;
+						if (spxFinal.size() >= 6 && spxFinal.rfind(".speex") == spxFinal.size() - 6) {
+							spxFinal.replace(spxFinal.size() - 6, 6, ".spx");
+						} else {
+							spxFinal += ".spx";
+						}
+						char cmd[1024];
+						std::snprintf(cmd, sizeof(cmd), "speexenc --quiet --rate %d --quality 5 '%s' '%s' 2>/dev/null", rate, rawPath.c_str(), spxFinal.c_str());
+						int rc = system(cmd);
+						if (rc == 0) {
+							remove(rawPath.c_str());
+							char info2[512];
+							std::snprintf(info2, sizeof(info2), "[voice_export] Wrapped to Ogg Speex: %s\n", spxFinal.c_str());
+							SERVER_PRINT(info2);
+						} else {
+							char info2[512];
+							std::snprintf(info2, sizeof(info2), "[voice_export] speexenc not available or failed (rc=%d). Kept raw: %s\n", rc, rawPath.c_str());
+							SERVER_PRINT(info2);
+						}
+					}
+#endif
 				}
 
 				// Metadata
