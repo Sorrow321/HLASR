@@ -117,6 +117,11 @@ static bool write_ogg_speex(const std::vector<std::vector<unsigned char>>& packe
 	ogg_stream_state os;
 	ogg_page og;
 	ogg_packet op = {};
+	int strip = 0;
+	if (CVAR_GET_FLOAT) {
+		int s = (int)CVAR_GET_FLOAT("vx_strip");
+		if (s > 0 && s < 1024) strip = s;
+	}
 	int serial = (int)((uintptr_t)&os ^ (uintptr_t)outPath.c_str());
 	if (ogg_stream_init(&os, serial) != 0)
 		return false;
@@ -185,9 +190,11 @@ static bool write_ogg_speex(const std::vector<std::vector<unsigned char>>& packe
 	// Data packets
 	long granule = 0;
 	for (const auto& pkt : packets) {
+		if (pkt.size() <= (size_t)strip)
+			continue;
 		memset(&op, 0, sizeof(op));
-		op.packet = (unsigned char*)pkt.data();
-		op.bytes = (long)pkt.size();
+		op.packet = (unsigned char*)(pkt.data() + strip);
+		op.bytes = (long)(pkt.size() - strip);
 		op.b_o_s = 0;
 		op.e_o_s = 0;
 		granule += header.frame_size;

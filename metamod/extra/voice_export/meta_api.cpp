@@ -28,6 +28,14 @@ extern "C" {
 		0,
 		nullptr
 	};
+
+	cvar_t vx_strip = {
+		"vx_strip",
+		"12",
+		FCVAR_EXTDLL,
+		0,
+		nullptr
+	};
 }
 
 meta_globals_t *gpMetaGlobals;
@@ -76,6 +84,7 @@ C_DLLEXPORT int Meta_Attach(PLUG_LOADTIME now, META_FUNCTIONS *pFunctionTable, m
 	CVAR_REGISTER(&vx_debug);
 	CVAR_REGISTER(&vx_spx);
 	CVAR_REGISTER(&vx_rate);
+	CVAR_REGISTER(&vx_strip);
 
 	if (meta_init_rehlds_api()) {
 		g_engfuncs.pfnServerPrint("[voice_export] ReHLDS API initialized.\n");
