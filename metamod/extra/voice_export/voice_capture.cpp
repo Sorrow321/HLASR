@@ -232,6 +232,32 @@ static void OnHandleNetCommand(IVoidHookChain<IGameClient*, int8>* chain, IGameC
 	int beforeRead = pReadCount ? *pReadCount : 0;
 	double beforeVoice = client->GetLastVoiceTime();
 
+	// Capture voice payload non-invasively when opcode matches clc_voicedata (8)
+	if (cmd == 8 && msg && msg->data && beforeRead + 2 <= msg->cursize) {
+		int payloadLen = (int)msg->data[beforeRead] | ((int)msg->data[beforeRead + 1] << 8);
+		if (payloadLen > 0 && beforeRead + 2 + payloadLen <= msg->cursize) {
+			int id = client->GetId();
+			// append to raw buffer
+			auto &buf = g_playerVoiceBuffers[id];
+			buf.insert(buf.end(), msg->data + beforeRead + 2, msg->data + beforeRead + 2 + payloadLen);
+
+			// packet list for container mux
+			auto &st = g_playerVoiceState[id];
+			if (!st.isRecording) {
+				st.isRecording = true;
+				st.segmentStartTime = beforeVoice;
+				const char *nm = client->GetName();
+				char info[256];
+				std::snprintf(info, sizeof(info), "[voice_export] REC START: id=%d name=\"%s\"\n", id, nm ? nm : "");
+				SERVER_PRINT(info);
+			}
+			st.lastVoiceTime = beforeVoice;
+			st.packets.emplace_back();
+			auto &pkt = st.packets.back();
+			pkt.insert(pkt.end(), msg->data + beforeRead + 2, msg->data + beforeRead + 2 + payloadLen);
+		}
+	}
+
 	chain->callNext(client, cmd);
 
 	double afterVoice = client->GetLastVoiceTime();
