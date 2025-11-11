@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cerrno>
 #include <cstring>
+#include <strings.h>
 #include <algorithm>
 #include <sstream>
 #ifdef _WIN32
@@ -584,9 +585,9 @@ static void Cmd_VoiceSegmentStop(void)
 		if (stIt2 != g_playerVoiceState.end()) {
 			bool wantSpeex = true, wantOpus = false;
 			if (mode) {
-				if (!Q_stricmp(mode, "speex")) { wantSpeex = true; wantOpus = false; }
-				else if (!Q_stricmp(mode, "opus")) { wantSpeex = false; wantOpus = true; }
-				else if (!Q_stricmp(mode, "both")) { wantSpeex = true; wantOpus = true; }
+				if (!strcasecmp(mode, "speex")) { wantSpeex = true; wantOpus = false; }
+				else if (!strcasecmp(mode, "opus")) { wantSpeex = false; wantOpus = true; }
+				else if (!strcasecmp(mode, "both")) { wantSpeex = true; wantOpus = true; }
 				else { wantSpeex = true; wantOpus = true; } // auto -> both
 			}
 			if (wantSpeex) {
