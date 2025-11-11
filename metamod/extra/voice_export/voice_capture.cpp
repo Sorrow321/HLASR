@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cerrno>
+#include <cstring>
 #include <algorithm>
 #include <sstream>
 #ifdef _WIN32
@@ -115,7 +116,7 @@ static bool write_ogg_speex(const std::vector<std::vector<unsigned char>>& packe
 {
 	ogg_stream_state os;
 	ogg_page og;
-	ogg_packet op;
+	ogg_packet op = {};
 	int serial = (int)((uintptr_t)&os ^ (uintptr_t)outPath.c_str());
 	if (ogg_stream_init(&os, serial) != 0)
 		return false;
@@ -129,21 +130,35 @@ static bool write_ogg_speex(const std::vector<std::vector<unsigned char>>& packe
 	header.bitrate = -1;
 	header.frame_size = header.frame_size > 0 ? header.frame_size : 160;
 
-	ogg_packet header_packet = {};
-	speex_header_to_packet(&header, &header_packet);
-
-	FILE *f = fopen(outPath.c_str(), "wb");
-	if (!f) {
+	int header_size = 0;
+	char* header_data = speex_header_to_packet(&header, &header_size);
+	if (!header_data || header_size <= 0) {
 		ogg_stream_clear(&os);
 		return false;
 	}
 
+	FILE *f = fopen(outPath.c_str(), "wb");
+	if (!f) {
+		ogg_stream_clear(&os);
+		if (header_data) speex_header_free(header_data);
+		return false;
+	}
+
 	// Write header packet
-	ogg_stream_packetin(&os, &header_packet);
+	memset(&op, 0, sizeof(op));
+	op.packet = (unsigned char*)header_data;
+	op.bytes = (long)header_size;
+	op.b_o_s = 1;
+	op.e_o_s = 0;
+	op.granulepos = 0;
+	ogg_stream_packetin(&os, &op);
 	while (ogg_stream_flush(&os, &og)) {
 		fwrite(og.header, 1, og.header_len, f);
 		fwrite(og.body, 1, og.body_len, f);
 	}
+
+	// free header_data after it's flushed
+	if (header_data) speex_header_free(header_data);
 
 	// Write minimal comment packet
 	const char* vendor = "voice_export";
@@ -412,6 +427,14 @@ static void Cmd_VoiceSegmentStop(void)
 	char info[512];
 	std::snprintf(info, sizeof(info), "[voice_export] Segment saved: %u bytes\n", (unsigned)it->second.size());
 	SERVER_PRINT(info);
+
+	// Reset state
+	auto stIt = g_playerVoiceState.find(id);
+	if (stIt != g_playerVoiceState.end()) {
+		stIt->second.isRecording = false;
+		stIt->second.segmentStartTime = 0.0;
+		stIt->second.packets.clear();
+	}
 }
 
 void VoiceCapture_RegisterServerCommands()
