@@ -210,7 +210,6 @@ static bool write_ogg_speex(const std::vector<std::vector<unsigned char>>& packe
 
 	fclose(f);
 	ogg_stream_clear(&os);
-	speex_header_free(&header_packet);
 	return true;
 }
 #endif
