@@ -11,6 +11,9 @@
 #else
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <ogg/ogg.h>
+#include <speex/speex.h>
+#include <speex/speex_header.h>
 #endif
 #include "enginecallbacks.h"
 
@@ -18,6 +21,8 @@ static std::unordered_map<int, std::vector<unsigned char>> g_playerVoiceBuffers;
 
 extern "C" {
 	extern cvar_t vx_debug;
+	extern cvar_t vx_spx;
+	extern cvar_t vx_rate;
 }
 
 // Hex helper for debug
@@ -43,6 +48,7 @@ struct PlayerVoiceState
 	bool isRecording = false;
 	double lastVoiceTime = 0.0;
 	double segmentStartTime = 0.0;
+	std::vector<std::vector<unsigned char>> packets;
 };
 
 static std::unordered_map<int, PlayerVoiceState> g_playerVoiceState;
@@ -104,6 +110,96 @@ static std::string netadr_to_string(const netadr_t *adr)
 	return std::string(buf);
 }
 
+#ifndef _WIN32
+static bool write_ogg_speex(const std::vector<std::vector<unsigned char>>& packets, const std::string& outPath, int sampleRate)
+{
+	ogg_stream_state os;
+	ogg_page og;
+	ogg_packet op;
+	int serial = (int)((uintptr_t)&os ^ (uintptr_t)outPath.c_str());
+	if (ogg_stream_init(&os, serial) != 0)
+		return false;
+
+	// Speex header
+	SpeexHeader header;
+	speex_init_header(&header, sampleRate, 1, &speex_nb_mode);
+	header.frames_per_packet = 1;
+	header.vbr = 0;
+	header.nb_channels = 1;
+	header.bitrate = -1;
+	header.frame_size = header.frame_size > 0 ? header.frame_size : 160;
+
+	ogg_packet header_packet = {};
+	speex_header_to_packet(&header, &header_packet);
+
+	FILE *f = fopen(outPath.c_str(), "wb");
+	if (!f) {
+		ogg_stream_clear(&os);
+		return false;
+	}
+
+	// Write header packet
+	ogg_stream_packetin(&os, &header_packet);
+	while (ogg_stream_flush(&os, &og)) {
+		fwrite(og.header, 1, og.header_len, f);
+		fwrite(og.body, 1, og.body_len, f);
+	}
+
+	// Write minimal comment packet
+	const char* vendor = "voice_export";
+	unsigned char cmdbuf[64];
+	memset(&op, 0, sizeof(op));
+	uint32_t vlen = (uint32_t)strlen(vendor);
+	if (vlen > sizeof(cmdbuf) - 8) vlen = sizeof(cmdbuf) - 8;
+	unsigned char *p = cmdbuf;
+	memcpy(p, &vlen, 4); p += 4;
+	memcpy(p, vendor, vlen); p += vlen;
+	uint32_t ncomments = 0;
+	memcpy(p, &ncomments, 4); p += 4;
+	op.packet = cmdbuf;
+	op.bytes = (long)(p - cmdbuf);
+	op.b_o_s = 0;
+	op.e_o_s = 0;
+	op.granulepos = 0;
+	ogg_stream_packetin(&os, &op);
+	while (ogg_stream_flush(&os, &og)) {
+		fwrite(og.header, 1, og.header_len, f);
+		fwrite(og.body, 1, og.body_len, f);
+	}
+
+	// Data packets
+	long granule = 0;
+	for (const auto& pkt : packets) {
+		memset(&op, 0, sizeof(op));
+		op.packet = (unsigned char*)pkt.data();
+		op.bytes = (long)pkt.size();
+		op.b_o_s = 0;
+		op.e_o_s = 0;
+		granule += header.frame_size;
+		op.granulepos = granule;
+		ogg_stream_packetin(&os, &op);
+		while (ogg_stream_pageout(&os, &og)) {
+			fwrite(og.header, 1, og.header_len, f);
+			fwrite(og.body, 1, og.body_len, f);
+		}
+	}
+
+	// End of stream
+	memset(&op, 0, sizeof(op));
+	op.e_o_s = 1;
+	ogg_stream_packetin(&os, &op);
+	while (ogg_stream_flush(&os, &og)) {
+		fwrite(og.header, 1, og.header_len, f);
+		fwrite(og.body, 1, og.body_len, f);
+	}
+
+	fclose(f);
+	ogg_stream_clear(&os);
+	speex_header_free(&header_packet);
+	return true;
+}
+#endif
+
 // Hook: HandleNetCommand
 static void OnHandleNetCommand(IVoidHookChain<IGameClient*, int8>* chain, IGameClient* client, int8 cmd)
 {
@@ -139,6 +235,10 @@ static void OnHandleNetCommand(IVoidHookChain<IGameClient*, int8>* chain, IGameC
 			SERVER_PRINT(info);
 		}
 		st.lastVoiceTime = afterVoice;
+		// keep packet boundary for container muxing
+		st.packets.emplace_back();
+		auto &pkt = st.packets.back();
+		pkt.insert(pkt.end(), msg->data + beforeRead, msg->data + beforeRead + consumed);
 	} else {
 		// Optional debug for troubleshooting voice detection
 		if (CVAR_GET_FLOAT && CVAR_GET_FLOAT("vx_debug") >= 1.0f) {
@@ -258,32 +358,30 @@ static void Cmd_VoiceSegmentStop(void)
 		fclose(f);
 
 #ifndef _WIN32
-		// Optionally wrap to Ogg Speex via speexenc if available
+		// Optionally wrap to Ogg Speex in-process (no transcoding)
 		if (CVAR_GET_FLOAT && CVAR_GET_FLOAT("vx_spx") >= 1.0f) {
 			int rate = (int)CVAR_GET_FLOAT("vx_rate");
 			if (rate <= 0) rate = 11025;
-			std::string spxOut = speexPath; // final .speex path requested to change to .spx later
-			// We will actually output .spx
-			std::string spxFinal = spxOut;
-			// replace extension .speex with .spx
+			std::string spxFinal = speexPath;
 			if (spxFinal.size() >= 6 && spxFinal.rfind(".speex") == spxFinal.size() - 6) {
 				spxFinal.replace(spxFinal.size() - 6, 6, ".spx");
 			} else {
 				spxFinal += ".spx";
 			}
-			char cmd[1024];
-			std::snprintf(cmd, sizeof(cmd), "speexenc --quiet --rate %d --quality 5 '%s' '%s' 2>/dev/null", rate, rawPath.c_str(), spxFinal.c_str());
-			int rc = system(cmd);
-			if (rc == 0) {
-				// remove raw and report
+			auto stIt2 = g_playerVoiceState.find(id);
+			bool ok2 = false;
+			if (stIt2 != g_playerVoiceState.end()) {
+				ok2 = write_ogg_speex(stIt2->second.packets, spxFinal, rate);
+			}
+			if (ok2) {
 				remove(rawPath.c_str());
-				char info[512];
-				std::snprintf(info, sizeof(info), "[voice_export] Wrapped to Ogg Speex: %s\n", spxFinal.c_str());
-				SERVER_PRINT(info);
+				char info2[512];
+				std::snprintf(info2, sizeof(info2), "[voice_export] Wrapped to Ogg Speex: %s\n", spxFinal.c_str());
+				SERVER_PRINT(info2);
 			} else {
-				char info[512];
-				std::snprintf(info, sizeof(info), "[voice_export] speexenc not available or failed (rc=%d). Kept raw: %s\n", rc, rawPath.c_str());
-				SERVER_PRINT(info);
+				char info2[512];
+				std::snprintf(info2, sizeof(info2), "[voice_export] Ogg Speex wrap failed. Kept raw: %s\n", rawPath.c_str());
+				SERVER_PRINT(info2);
 			}
 		}
 #endif
@@ -425,6 +523,7 @@ void VoiceCapture_OnStartFrame()
 
 			st.isRecording = false;
 			st.segmentStartTime = 0.0;
+			st.packets.clear();
 		}
 	}
 }
