@@ -31,7 +31,7 @@ all:
 	$(MAKE) $(NAME) && strip -x $(BIN_DIR)/$(NAME)_mm_i386.so
 
 $(NAME): $(OBJ_LINUX)
-	$(COMPILER) $(INCLUDE) $(CFLAGS) $(OBJ_LINUX) $(EXTRA_SOURCES) $(LINK) -logg -lspeex -o$(BIN_DIR)/$(NAME)_mm_i386.so
+	$(COMPILER) $(INCLUDE) $(CFLAGS) $(OBJ_LINUX) $(EXTRA_SOURCES) $(LINK) -logg -lspeex -lopus -o$(BIN_DIR)/$(NAME)_mm_i386.so
 
 check:
 	cppcheck $(INCLUDE) --quiet --max-configs=100 -D__linux__ -DNDEBUG .
