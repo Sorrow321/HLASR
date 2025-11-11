@@ -251,7 +251,14 @@ static void OnHandleNetCommand(IVoidHookChain<IGameClient*, int8>* chain, IGameC
 				std::snprintf(info, sizeof(info), "[voice_export] REC START: id=%d name=\"%s\"\n", id, nm ? nm : "");
 				SERVER_PRINT(info);
 			}
-			st.lastVoiceTime = beforeVoice;
+		// Use current server time for silence detection
+		double nowTs = 0.0;
+		if (g_RehldsApi) {
+			if (auto svd = g_RehldsApi->GetServerData()) {
+				nowTs = svd->GetTime();
+			}
+		}
+		st.lastVoiceTime = nowTs;
 			st.packets.emplace_back();
 			auto &pkt = st.packets.back();
 			pkt.insert(pkt.end(), msg->data + beforeRead + 2, msg->data + beforeRead + 2 + payloadLen);
@@ -301,7 +308,8 @@ static void OnHandleNetCommand(IVoidHookChain<IGameClient*, int8>* chain, IGameC
 void VoiceCapture_RegisterHooks()
 {
 	if (g_RehldsHookchains) {
-		g_RehldsHookchains->HandleNetCommand()->registerHook(OnHandleNetCommand);
+		// High priority so we see packets before other plugins short-circuit
+		g_RehldsHookchains->HandleNetCommand()->registerHook(OnHandleNetCommand, HC_PRIORITY_HIGH);
 		// Also observe raw client packets for debugging/voicedata signature
 		g_RehldsHookchains->PreprocessPacket()->registerHook([](IHookChain<bool, uint8*, unsigned int, const netadr_t&>* chain, uint8* data, unsigned int len, const netadr_t& from) -> bool {
 			// Only print when explicitly requested
